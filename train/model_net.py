@@ -58,13 +58,18 @@ class FaceNet(object):
         label_true1 = tf.reshape(label_true1, [-1])
         label_pred1 = tf.reshape(label_pred1, [-1])
 
-        loss = -(label_true1*(tf.log(label_pred1+1e-10)) + (1-label_true1)*(1-tf.log(label_pred1+1e-10)))
+        loss = -(label_true1*(tf.log(label_pred1+ 1e-10)) + (1-label_true1)*(1-tf.log(label_pred1+ 1e-10)))
         _, k_index = tf.nn.top_k(loss, k=keep_num)
         loss = tf.gather(loss, k_index)
 
         return tf.reduce_mean(loss)
 
     def loss_box(self, label_true, bbox_true, bbox_pred):
+
+        """ 
+            box的loss MSE
+            在每个mini-batch中选取前70%的top loss作为困难样本，只利用这部分计算梯度
+        """
 
         mask = self.cal_mask(label_true, 'bbox')
         num = tf.cast(tf.reduce_sum(mask), dtype=tf.float32) * self.num_keep_radio
@@ -82,6 +87,11 @@ class FaceNet(object):
         return tf.reduce_mean(square_error)
 
     def loss_landmark(self, label_true, landmark_true, landmark_pred):
+
+        """ 
+            landmark的loss MSE
+            在每个mini-batch中选取前70%的top loss作为困难样本，只利用这部分计算梯度
+        """
 
         mask = self.cal_mask(label_true, 'landmark')
         num = tf.cast(tf.reduce_sum(mask), dtype=tf.float32) * self.num_keep_radio

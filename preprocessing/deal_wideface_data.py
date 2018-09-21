@@ -36,9 +36,12 @@ if not os.path.exists(NEG_DIR):
 
 
 from utils import IoU
+from deal_utils import getTxtInfo, randomCrop, randomShift
 
-# 随机生成neg样本量
-NEGNUM = 40
+# 随机生成样本量
+RandomCrop_NEGNUM = 40
+RandomShift_NEGNUM = 5
+RandomShift_POS_PART_NUM = 20
 
 def main():
 
@@ -50,122 +53,90 @@ def main():
         annotations = f.readlines()
 
     print("%d pics in total" % len(annotations))
-    p_idx, n_idx, d_idx, idx, box_idx= 0, 0, 0, 0, 0
 
-    for annotation in annotations:
+    datalist = getTxtInfo(WIDER_TRAIN_TXT, WIDER_IMG_DIR, with_landmark=False)
 
-        annotation = annotation.strip().split(' ')
-        #图片路径
-        im_path = annotation[0]
+    p_idx, n_idx, d_idx, idx, box_idx = 0, 0, 0, 0, 0
 
-        #box 坐标
-        bbox = [float(x) for x in annotation[1:]]
-        #变形(可能存在多个box)
-        boxes = np.array(bbox, dtype=np.float32).reshape(-1, 4)
+    for im_path, boxes in datalist:
 
         #加载图片
-        img = cv2.imread(os.path.join(WIDER_IMG_DIR, im_path + '.jpg'))
-        height, width, channel = img.shape
+        img = cv2.imread(im_path)
+        height, width, _ = img.shape
 
         idx += 1
         if idx % 100 == 0:
             print("%s images done, pos: %s part: %s neg: %s"%(idx, p_idx, d_idx, n_idx))
 
-        # 随机生成 neg 图片
+        # 随机生成 neg 图片 最小size为40 
         neg_num = 0
-        while neg_num < NEGNUM:
-            #neg_num's size [40,min(width, height) / 2],min_size:40 
-            size = np.random.randint(12, min(width, height) / 2)
-            #top_left
-            nx = np.random.randint(0, width - size)
-            ny = np.random.randint(0, height - size)
-            #random crop
-            crop_box = np.array([nx, ny, nx + size, ny + size])
-            #计算IOU
+        while neg_num < RandomCrop_NEGNUM:
+            crop_box = randomCrop(width, height)
             Iou = IoU(crop_box, boxes)
             
-            cropped_im = img[ny : ny + size, nx : nx + size, :]
+            cropped_im = img[crop_box[1]:crop_box[3], crop_box[0]:crop_box[2], :]
             resized_im = cv2.resize(cropped_im, (12, 12), interpolation=cv2.INTER_LINEAR)
 
-            #保存图片，保存记录
             if np.max(Iou) < 0.3:
-                # Iou with all gts must below 0.3
                 save_file = os.path.join(NEG_DIR, "%s.jpg"%n_idx)
                 f_neg.write("negative/%s.jpg"%n_idx + ' 0\n')
                 cv2.imwrite(save_file, resized_im)
                 n_idx += 1
                 neg_num += 1
 
-        # 对box进行漂移产生neg图片
+        # 对box进行随机漂移
         for box in boxes:
-            # box (x_left, y_top, x_right, y_bottom)
+
             x1, y1, x2, y2 = box
-            #gt's width
             w = x2 - x1 + 1
-            #gt's height
             h = y2 - y1 + 1
 
-            # ignore small faces
-            # in case the ground truth boxes of small faces are not accurate
+            # 忽略较小尺寸的box
             if max(w, h) < 40 or x1 < 0 or y1 < 0:
                 continue
-            for i in range(5):
-                size = np.random.randint(12, min(width, height) / 2)
-                # delta_x and delta_y are offsets of (x1, y1)
-                delta_x = np.random.randint(max(-size, -x1), w)
-                delta_y = np.random.randint(max(-size, -y1), h)
-                nx1 = int(max(0, x1 + delta_x))
-                ny1 = int(max(0, y1 + delta_y))
-                if nx1 + size > width or ny1 + size > height:
+
+            # 生成 neg 图片
+            for _ in range(RandomShift_NEGNUM):
+
+                shift_box = randomShift(width, height, x1, y1, w, h, normal=False)
+
+                if shift_box is None:
                     continue
-                crop_box = np.array([nx1, ny1, nx1 + size, ny1 + size])
-                Iou = IoU(crop_box, boxes)
-        
-                cropped_im = img[ny1: ny1 + size, nx1: nx1 + size, :]
+
+                Iou = IoU(shift_box, boxes)
+                cropped_im = img[shift_box[1]:shift_box[3], shift_box[0]:shift_box[2], :]
                 resized_im = cv2.resize(cropped_im, (12, 12), interpolation=cv2.INTER_LINEAR)
         
                 if np.max(Iou) < 0.3:
-                    # Iou with all gts must below 0.3
                     save_file = os.path.join(NEG_DIR, "%s.jpg" % n_idx)
                     f_neg.write("negative/%s.jpg" % n_idx + ' 0\n')
                     cv2.imwrite(save_file, resized_im)
                     n_idx += 1    
                         
             # 生成 pos 图片和 part 图片
-            for i in range(20):
-                # pos and part face size [minsize*0.8,maxsize*1.25]
-                size = np.random.randint(int(min(w, h) * 0.8), np.ceil(1.25 * max(w, h)))
+            for _ in range(RandomShift_POS_PART_NUM):
 
-                # delta here is the offset of box center
-                delta_x = np.random.randint(-w * 0.2, w * 0.2)
-                delta_y = np.random.randint(-h * 0.2, h * 0.2)
-                #show this way: nx1 = max(x1+w/2-size/2+delta_x)
-                nx1 = int(max(x1 + w / 2 + delta_x - size / 2, 0))
-                #show this way: ny1 = max(y1+h/2-size/2+delta_y)
-                ny1 = int(max(y1 + h / 2 + delta_y - size / 2, 0))
-                nx2 = nx1 + size
-                ny2 = ny1 + size
+                shift_box = randomShift(width, height, x1, y1, w, h, normal=True)
 
-                if nx2 > width or ny2 > height:
-                    continue 
-                crop_box = np.array([nx1, ny1, nx2, ny2])
-                #yu gt de offset
-                offset_x1 = (x1 - nx1) / float(size)
-                offset_y1 = (y1 - ny1) / float(size)
-                offset_x2 = (x2 - nx2) / float(size)
-                offset_y2 = (y2 - ny2) / float(size)
-                #crop
-                cropped_im = img[ny1 : ny2, nx1 : nx2, :]
-                #resize
+                if shift_box is None:
+                    continue
+
+                size = shift_box[2] - shift_box[0]
+                offset_x1 = (x1 - shift_box[0]) / float(size)
+                offset_y1 = (y1 - shift_box[1]) / float(size)
+                offset_x2 = (x2 - shift_box[2]) / float(size)
+                offset_y2 = (y2 - shift_box[3]) / float(size)
+
+                cropped_im = img[shift_box[1]:shift_box[3], shift_box[0]:shift_box[2], :]
                 resized_im = cv2.resize(cropped_im, (12, 12), interpolation=cv2.INTER_LINEAR)
 
                 box_ = box.reshape(1, -1)
-                if IoU(crop_box, box_) >= 0.65:
+                if IoU(shift_box, box_) >= 0.65:
                     save_file = os.path.join(POS_DIR, "%s.jpg"%p_idx)
                     f_pos.write("positive/%s.jpg"%p_idx + ' 1 %.2f %.2f %.2f %.2f\n'%(offset_x1, offset_y1, offset_x2, offset_y2))
                     cv2.imwrite(save_file, resized_im)
                     p_idx += 1
-                elif IoU(crop_box, box_) >= 0.4:
+                elif IoU(shift_box, box_) >= 0.4:
                     save_file = os.path.join(PART_DIR, "%s.jpg"%d_idx)
                     f_part.write("part/%s.jpg"%d_idx + ' -1 %.2f %.2f %.2f %.2f\n'%(offset_x1, offset_y1, offset_x2, offset_y2))
                     cv2.imwrite(save_file, resized_im)
